@@ -1,0 +1,30 @@
+#ifndef EIMAGE_H
+#define EIMAGE_H
+
+#include <QImage>
+
+class ImageFilter;
+
+class EImage : public QImage {
+    Q_OBJECT
+public:
+    EImage(const QImage &image);
+    EImage(const EImage &image);
+    ~EImage();
+    void applyFilter(ImageFilter* filter, QRect region = QRect());
+    void additiveBlend(EImage* anotherImage);
+    void threshold(int min, int max);
+    void invert();
+    void buildHistogram();
+    int getIrisThreshold();
+signals:
+	void initialiseProgressBar(int min, int max);
+	void updateProgressBar(int progress);
+private:
+    void setup();
+    int histogram[256];
+    //float** edgeMag;
+    //float** edgeDir;
+};
+
+#endif // EIMAGE_H

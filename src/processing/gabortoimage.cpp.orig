@@ -1,0 +1,115 @@
+/*
+ *  
+ */
+
+// TODO: Look at ways to consider if a filter is good or bad using masks of pixels in the range of the filter
+
+#include "gabortoimage.h"
+
+using namespace std;
+
+void gaborImage(QImage * rawImage, bool ** mask, bool bitCode[2048], bool bitCodeMask[2048]) {
+
+	int width = rawImage->width();	// theta direction
+	int height = rawImage->height();	// r direction
+
+	// Number of slices image is cut up into. Ideally angular slices should divide
+	// 360, and size of bitCode without a remainder. More importantly, their product should
+	// be divisible by 32
+	int angularSlices = 256;
+	int radialSlices = 1024 / angularSlices;
+
+	// need to account for very low res images (~< 30 in case of 16 radialSlices)
+	int filterHeight;
+	int bitCodePosition = 0;
+
+	SinWavelet * pSine = NULL;
+	CosWavelet * pCosine = NULL;
+
+	for(int aSlice = 0; aSlice < angularSlices; ++aSlice) {
+
+		int theta = (aSlice * 360) / angularSlices;
+
+		for(int rSlice = 0; rSlice < radialSlices; ++rSlice) { 
+
+			int radius = ((rSlice * (height - 6)) / (2*radialSlices)) + 3 ; // +3 since first 3 not included
+
+
+
+			// Set filter dimension to the largest filter that fits in the image
+			filterHeight = (radius < (height - radius)) ? 2*radius-1: 2*(height - radius)-1;
+			if(filterHeight > width - 1) 
+				filterHeight = width - 1;
+
+			pSine = new SinWavelet(filterHeight);
+			pCosine = new CosWavelet(filterHeight);
+
+			pSine->generateFilter();
+			pCosine->generateFilter();
+
+			bitCode[bitCodePosition] = gaborPixel(radius,theta,*pCosine,rawImage,mask);
+			bitCode[bitCodePosition + 1] = gaborPixel(radius,theta,*pSine,rawImage,mask);
+
+			if(pSine) { 
+				delete pSine;
+				pSine = NULL;
+
+			}
+
+			if(pCosine) {
+				delete pCosine;
+				pCosine = NULL;
+			}
+
+			if(mask[radius][theta])
+				bitCodeMask[bitCodePosition] = true;
+			else 
+				bitCodeMask[bitCodePosition] = false;
+
+
+			// Check whether a filter is good or bad
+			if(!checkFilter(radius,theta,filterHeight,mask))
+				bitCodeMask[bitCodePosition] = false;
+
+			bitCodeMask[bitCodePosition + 1] = bitCodeMask[bitCodePosition];
+
+			bitCodePosition+=2;
+
+		}
+	}
+
+	// Make sure all the pointers are being good
+	if(pSine) { 
+		delete pSine;
+		pSine = NULL;
+	}
+
+	if(pCosine) {
+		delete pCosine;
+		pCosine = NULL;
+	}
+
+}
+
+
+bool checkFilter(int radius, int theta, int filterHeight, bool ** mask) {
+
+	int sum = 0;
+	int total = 0;
+	double goodRatio = 0.8; //ratio of good bits in a good filter
+	double ratio;
+
+	for(int rPos = radius - (filterHeight/2); rPos <= radius + (filterHeight/2); ++rPos) {
+		for(int tPos = theta - (filterHeight/2); tPos <= theta + (filterHeight/2); ++tPos) { 
+
+			sum += mask[rPos][tPos];
+			++total;
+
+		}
+	}
+
+	ratio = static_cast<double>(sum) / static_cast<double>(total);
+
+	return (ratio >= goodRatio) ? true : false ;
+
+}

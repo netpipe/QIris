@@ -1,0 +1,13 @@
+Run qmake first to generate the Makefile:
+    qmake
+
+Then compile the source code according to the generated Makefile:
+    make
+
+Now simply run the executable:
+    ./iris
+
+ ...and then File -> Open a bitmap of your choice.
+
+Alternatively, make the application automatically load a certain bitmap image with:
+    ./iris someImage.bmp

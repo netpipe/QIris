@@ -1,0 +1,186 @@
+#include "eimage.h"
+#include "imagefilter.h"
+#include "median.h"
+#include <QDebug>
+#include <QColor>
+
+EImage::EImage(const QImage& image) : QImage(image) {
+    setup();
+	connect(this, SIGNAL(initialiseProgressBar(int,int)), parent, SIGNAL(initialiseProgressBar(int,int)));
+	connect(this, SIGNAL(updateProgressBar(int)), parent, SIGNAL(updateProgressBar(int)));
+}
+
+EImage::EImage(const EImage& image) : QImage(image) {
+    setup();
+}
+
+void EImage::setup() { // Creates the 2D arrays
+//    edgeMag = new float*[width()];
+//    for (int i = 0; i < width(); i++)
+//        edgeMag[i] = new float[height()];
+//    
+//    edgeDir = new float*[width()];
+//    for (int i = 0; i < width(); i++)
+//        edgeDir[i] = new float[height()];
+//    
+//    for (int x = 0; x < width(); x++) {
+//        for (int y = 0; y < height(); y++) {
+//            edgeDir[x][y] = 0;
+//            edgeMag[x][y] = 0;
+//        }
+//    }
+    for (int i = 0; i < 256; i++)
+        histogram[i] = 0;
+    buildHistogram();
+}
+
+void EImage::applyFilter(ImageFilter *filter, QRect region) {
+    // Filter origin cannot be 0,0 thus we need a piece of code to
+    // save the offset, basically (n-1)/2
+    int offset = (filter->getDimension() - 1) / 2;
+    
+    
+    // An image is kept as reference to prevent feedback and this
+    // is where the original pixel data is read from during the
+    // for loops.
+    QImage refImage = copy(this->rect());
+    
+    // If no rectangle is passed, or the rectangle is empty then
+    // apply to whole image.
+    if (region.isEmpty())
+        region = this->rect();
+    
+    for(int imgX = region.topLeft().x(); imgX < region.bottomRight().x(); imgX++) {
+        for(int imgY = region.topLeft().y(); imgY < region.bottomRight().y(); imgY++) {
+
+            for (int filterX = -offset; filterX <= offset; filterX++) {
+                for (int filterY = -offset; filterY <= offset; filterY++) {
+                    // currentPoint stores the x,y coordinate addition of the position
+                    // in the current image loop (the first two for loops) and the position
+                    // in the current filter loop.  we can use QImage::valid() to make sure
+                    // we are not out of the bounds of the 
+                    QPoint currentPoint(imgX + filterX, imgY + filterY);
+                    int pixelValue = 0;
+                    if (refImage.valid(currentPoint))
+                        pixelValue = refImage.pixelIndex(currentPoint);
+
+                    filter->addValue(filterX+offset, filterY+offset, pixelValue);
+                }
+            }
+			int newVal = filter->outputPixel();
+			setPixel(QPoint(imgX,imgY), newVal);
+        }
+    }
+}
+
+void EImage::additiveBlend(EImage* otherImage) {
+    // An image is kept as reference to prevent feedback and this
+    // is where the original pixel data is read from during the
+    // for loops.
+    QImage refImage = copy(this->rect());
+	emit initialiseProgressBar(0, refImage.width());
+    for(int imgX = 0; imgX < refImage.width(); imgX++) {
+		emit updateProgressBar(imgX);  //emit every 5 loops
+        for(int imgY = 0; imgY < refImage.height(); imgY++) { 
+            int sum = refImage.pixelIndex(imgX,imgY) + otherImage->pixelIndex(imgX,imgY);
+            if (sum > 255)
+                sum = 255;
+            else if (sum < 0)
+                sum = 0;
+            setPixel(imgX, imgY, 255 - sum);
+        }
+    }
+}
+
+void EImage::threshold(int min, int max) {
+    for (int x = 0; x < width(); x++) {
+        for (int y = 0; y < height(); y++) {
+            if (pixelIndex(x,y) < min)
+                setPixel(x,y, 0);
+            else if (pixelIndex(x,y) >= max)
+                setPixel(x,y, 255);
+        }
+    }
+}
+
+
+void EImage::invert() {
+    for(int imgX = 0; imgX < width(); imgX++) {
+        for(int imgY = 0; imgY < height(); imgY++) {
+            setPixel(QPoint(imgX,imgY), abs(pixelIndex(imgX, imgY) - 255));
+        }
+    }
+}
+
+void EImage::buildHistogram() {
+    float max = 0;
+    QImage hist(size(), QImage::Format_ARGB32);
+    for(int imgX = 0; imgX < width(); imgX++) {
+        for(int imgY = 0; imgY < height(); imgY++) {
+            int current = pixelIndex(imgX, imgY);
+            for (int index = 0; index < 256; index++) {
+                if(current == index) {
+                    histogram[index]++;
+                    if(histogram[index] > max)
+                        max = histogram[index];
+                    break;
+                }
+            }
+        }
+    }
+    // Output fancy image:
+    for (int i = 0; i < 256; i++) {
+        for(int imgX = 0; imgX < width(); imgX++) {
+            for(int imgY = 0; imgY < height(); imgY++) {
+                if(pixelIndex(imgX,imgY) == i) {
+                    QColor k;
+                    k = QColor::fromHsv(i, 255, 254 * ((histogram[i] + 1)/ max), 255);
+                    if (!k.isValid()) {
+                        exit(2);
+                    }
+                    hist.setPixel(imgX, imgY, qRgb(k.red(), k.green(), k.blue()));
+                }
+            }
+        }
+    }
+    hist.save("test.bmp");
+}
+
+int EImage::getIrisThreshold() {
+    // The histogram generally shows 4 peaks as a property of the image.
+    // The darkest peak represents the mass of dark pixels in the pupil,
+    // the next lightest peak is usually the overall mass of pixels in
+    // the iris.  It is usually a good idea to apply the median filter
+    // first to the image to extract the best peaks out of the image
+    // to avoid variation from noise.
+    MedianFilter m(15);
+    m.generateFilter();
+    applyFilter(&m);
+    buildHistogram();
+    // Plotted on a graph, we should have some distinct peaks, two for
+    // the greyish centres.  The first, and highest peak is what we
+    // want to threshold around so we drop the 8 outermost groups
+    // and find the maximum value.
+    int localMax = -1;
+    int localMaxIndex = -1;
+    for (int i = 96; i < 202; ++i)  {
+        if (histogram[i] > localMax) {
+            localMax = histogram[i];
+            localMaxIndex = i;
+        }
+    }
+    
+    qDebug() << "Iris peak: " << localMaxIndex;
+    // Returns lowest bound of pixelIndex demarking iris.
+    return localMaxIndex;
+}
+
+EImage::~EImage() {
+    // Delete 2D Arrays
+//    for (int i = 0; i < width(); i++) {
+//        delete [] edgeMag[i];
+//        delete [] edgeDir[i];
+//    }
+//    delete [] edgeDir;
+//    delete [] edgeMag;
+}
